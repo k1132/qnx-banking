@@ -7,7 +7,7 @@ static const unsigned int DOWNSCALER = 0x8000;
 static const unsigned int UINT16_MAX = 0xFFFF;
 static const unsigned int UINT16_MIN = 0x0000;
 
-unsigned int sim_choose(unsigned int lo, unsigned int hi)
+int sim_choose(unsigned int lo, unsigned int hi)
 {
 #if SIM_CHOOSE_HI_EXCLUSIVE
 	hi--;
@@ -33,5 +33,5 @@ unsigned int sim_choose(unsigned int lo, unsigned int hi)
 	unsigned int x = ((unsigned int) random()) / DOWNSCALER;
 	unsigned int y = ((x * (hi - lo)) / (UINT16_MAX - UINT16_MIN)) + lo;
 
-	return y;
+	return (int)y;
 }

@@ -12,7 +12,7 @@
 #define MIN_TO_SEC(MI) (60 * MI)
 
 #define SIM_CHOOSE_HI_EXCLUSIVE 0
-unsigned int sim_choose(unsigned int lo, unsigned int hi);
+int sim_choose(unsigned int lo, unsigned int hi);
 
 /*
 unsigned int sim_mil_to_min(unsigned int hr, unsigned int mi);
