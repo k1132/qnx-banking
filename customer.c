@@ -1,21 +1,21 @@
+#include <stdlib.h>
+#include "customer.h"
 
-struct customer {
-	int id;
-	int enqueue_sec;
-	int dequeue_sec;
-	int time_with_teller;
-};
+struct customer *customer_make(int cid)
+{
+	struct customer *cust = malloc(sizeof(struct customer));
+	cust->cid = cid;
+	cust->enqueue_sec = 0;
+	cust->dequeue_sec = 0;
+	cust->time_with_teller = 0;
 
-/*
- * The maximum size of the queue of customers. This project doesn't deal with
- * queuing theory. We simply create an array to hold each possible customer that
- * will arrive throughout the day.
- *
- * The actual worst case maximum is 420. The bank is open for 420 minutes, and
- * a customer could arrive every single minute (in the worst case). The actual
- * maximum is 500 so we can detect lapses in timing logic.
- */
-#define MAX_CUSTOMERS_PER_DAY 500
+	return cust;
+}
+
+void customer_free(struct customer* cust)
+{
+	free(cust);
+}
 
 /*
  * The queue of customers. This structure is manipulated only by functions
@@ -24,6 +24,7 @@ struct customer {
 static struct customer *queue[MAX_CUSTOMERS_PER_DAY];
 static volatile int poll_slot = 0;
 static volatile int push_slot = 0;
+static volatile int q_plugged = 0;
 
 void customer_q_push(struct customer *cust)
 {
@@ -37,8 +38,12 @@ struct customer *customer_q_poll()
 
 int customer_q_can_poll()
 {
-	return push_slot > poll_slot;
+	if (push_slot > poll_slot) {
+		return EAVAIL;
+	} else if (q_plugged) {
+		return EEMPTY;
+	} else {
+		return ENOCUS;
+	}
 }
-
-
 
