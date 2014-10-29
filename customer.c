@@ -36,6 +36,11 @@ struct customer *customer_q_poll()
 	return queue[poll_slot++];
 }
 
+void customer_q_plug()
+{
+	q_plugged = 1;
+}
+
 int customer_q_can_poll()
 {
 	if (push_slot > poll_slot) {

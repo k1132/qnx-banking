@@ -26,6 +26,8 @@ void customer_free(struct customer* cust);
 void customer_q_push(struct customer *cust);
 struct customer *customer_q_poll();
 
+void customer_q_plug();
+
 #define EAVAIL 0
 #define EEMPTY 1
 #define ENOCUS 2
