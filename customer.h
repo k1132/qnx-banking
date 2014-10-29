@@ -23,6 +23,7 @@ void customer_free(struct customer* cust);
  */
 #define MAX_CUSTOMERS_PER_DAY 500
 
+int customer_q_max_depth(void);
 void customer_q_push(struct customer *cust);
 struct customer *customer_q_poll();
 

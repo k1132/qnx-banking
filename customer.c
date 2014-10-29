@@ -26,13 +26,26 @@ static volatile int poll_slot = 0;
 static volatile int push_slot = 0;
 static volatile int q_plugged = 0;
 
+static volatile int max_depth = 0;
+
+int customer_q_max_depth()
+{
+	return max_depth;
+}
+
 void customer_q_push(struct customer *cust)
 {
 	queue[push_slot++] = cust;
+
+	int depth = push_slot - poll_slot;
+	if (depth > max_depth) max_depth = depth;
 }
 
 struct customer *customer_q_poll()
 {
+	int depth = push_slot - poll_slot;
+	if (depth > max_depth) max_depth = depth;
+
 	return queue[poll_slot++];
 }
 

@@ -48,20 +48,6 @@ void sim_sleep(int sim_seconds, int *sim_sec)
 	*sim_sec += sim_seconds;
 }
 
-//static int timespec_subtract(struct timespec *result, struct timespec *t1,
-//		struct timespec *t0)
-//{
-//	if ((t1->tv_nsec - t0->tv_nsec) < 0) {
-//		result->tv_sec = t1->tv_sec - t0->tv_sec - 1;
-//		result->tv_nsec = 1000000000 + t1->tv_nsec - t0->tv_nsec;
-//	} else {
-//		result->tv_sec = t1->tv_sec - t0->tv_sec;
-//		result->tv_nsec = t1->tv_nsec - t0->tv_nsec;
-//	}
-//
-//	return 0;
-//}
-
 /* Subtract the ‘struct timespec’ values X and Y,
  storing the result in RESULT.
  Return 1 if the difference is negative, otherwise 0. */
@@ -115,5 +101,16 @@ void sim_fmt_time(char* thd_buf, size_t count, int sim_s)
 	mil_h = mil_m / 60;
 	mil_m = mil_m % 60;
 
-	snprintf(thd_buf, count, "SIM> %02d:%02d:%02d", mil_h, mil_m, mil_s);
+	char *xm;
+	if (mil_h > 12) {
+		mil_h -= 12;
+		xm = "PM";
+	} else if (mil_h == 12) {
+		xm = "PM";
+	} else {
+		xm = "AM";
+	}
+
+	snprintf(thd_buf, count, "SIM> %02d:%02d:%02d %s", mil_h, mil_m, mil_s,
+			xm);
 }
