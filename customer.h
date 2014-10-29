@@ -1,12 +1,27 @@
 #ifndef CUSTOMER_H_
 #define CUSTOMER_H_
 
+/*
+ * Proj: 4
+ * File: customer.h
+ * Date: 29 October 2014
+ * Auth: Steven Kroh (skk8768)
+ *
+ * Description:
+ *
+ * This file contains the public interface to the customer module. A customer
+ * structure is provided to hold metrics associated with the customer's time
+ * at the bank.
+ *
+ * Finally, this module allows for the manipulation of a customer queue.
+ */
+
 struct customer
 {
-	int cid;
-	int enqueue_sec;
-	int dequeue_sec;
-	int time_with_teller;
+	int cid; /* Customer ID */
+	int enqueue_sec; /* The second that the customer entered the queue */
+	int dequeue_sec; /* The second that the customer left the queue */
+	int time_with_teller; /* The elapsed seconds spent in transaction */
 };
 
 struct customer *customer_make(int cid);
@@ -26,6 +41,8 @@ void customer_free(struct customer* cust);
 int customer_q_max_depth(void);
 void customer_q_push(struct customer *cust);
 struct customer *customer_q_poll();
+
+void customer_free_all(void);
 
 void customer_q_plug();
 

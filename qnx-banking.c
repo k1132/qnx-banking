@@ -1,3 +1,27 @@
+/*
+ * Proj: 4
+ * File: qnx-banking.c
+ * Date: 29 October 2014
+ * Auth: Steven Kroh (skk8768)
+ *
+ * Description:
+ *
+ * This file contains the implementation of project 4. Using a QNX neutrino
+ * system, this program simulates the workflow in a typical banking environment.
+ * That is, there is a single queue leading to a "multi-threaded" teller
+ * "server".
+ *
+ * The architecture involves one thread to generate customers (as passive
+ * data structures), three threads acting as the tellers, and one thread
+ * which accumulates business statistics.
+ *
+ * This lab applies the following concurrent structures:
+ *  - pthreads
+ *  - mutexes
+ *  - condition variables and broadcasting
+ *  - message passing (QNX pulses)
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
@@ -8,32 +32,63 @@
 #include "sim.h"
 #include "customer.h"
 
+/*
+ * The second at which the bank opens: 9:00 AM converted to seconds.
+ */
 static const int SEC_AT_BANK_OPEN = SIM_MIL_TO_SEC(9, 0);
+/*
+ * The second at which the bank closes: 4:00 PM converted to seconds.
+ */
 static const int SEC_AT_BANK_CLOSE = SIM_MIL_TO_SEC(16, 0);
 
-static const int ARRIVE_LO = MIN_TO_SEC(1);
-static const int ARRIVE_HI = MIN_TO_SEC(4);
+static const int ARRIVE_LO = MIN_TO_SEC(1); /* The lower cust arrival bound */
+static const int ARRIVE_HI = MIN_TO_SEC(4); /* The upper cust arrival bound */
 
-static const int TRANST_LO = 30;
-static const int TRANST_HI = MIN_TO_SEC(6);
+static const int TBREAK_LO = MIN_TO_SEC(30); /* The lower teller break bound */
+static const int TBREAK_HI = MIN_TO_SEC(60); /* The upper teller break bound */
 
-static const int NUM_TELLERS = 3;
+static const int LBREAK_LO = MIN_TO_SEC(1); /* The lower teller break length */
+static const int LBREAK_HI = MIN_TO_SEC(4); /* The upper teller break length */
 
+static const int TRANST_LO = 30; /* The lower transaction bound */
+static const int TRANST_HI = MIN_TO_SEC(6); /* The upper transaction bound */
+
+static const int NUM_TELLERS = 3; /* The number of tellers in the system */
+
+/*
+ * This mutex assists the threads in maintaining mutually exclusive access
+ * to the structures in the customer module. The mutex is allocated and
+ * initialized statically - avoiding a call to pthread_mutex_init().
+ */
 static pthread_mutex_t queue_mutex =
 PTHREAD_MUTEX_INITIALIZER;
 
+/*
+ * This condition variable assists the threads in blocking on the customer
+ * module when nothing is available to poll. The condvar is allocated and
+ * initialized statically - avoiding a call to pthread_cond_init().
+ */
 static pthread_cond_t queue_cond =
 PTHREAD_COND_INITIALIZER;
 
+/*
+ * The channel id which will be allocated in main(). The represented channel
+ * facilitates communication of statistics from domain threads to the stats
+ * muncher thread.
+ */
 static int chid;
-#define MET_CUST_Q_ELAPSED 2
-#define MET_CUST_T_ELAPSED 3
-#define MET_TELL_C_ELAPSED 4
+#define MET_CUST_Q_ELAPSED 2 /* Pulse code indicating a queue wait time */
+#define MET_CUST_T_ELAPSED 3 /* Pulse code indicating a transaction time */
+#define MET_TELL_C_ELAPSED 4 /* Pulse code indicating a teller wait time */
 
-static void cust_gen(void);
-static void teller(int *tid_ptr);
-static void stat_muncher(void);
+static void cust_gen(void); /* Thread function for the customer generator */
+static void teller(int *tid_ptr); /* Thread function for the tellers */
+static void stat_muncher(void); /* Thread function for the stats manager */
 
+/**
+ * Creates all the threads in the system. This function joins on all spawned
+ * pthreads. Furthermore, the statistics pulse channel is allocated here.
+ */
 int main(int argc, char *argv[])
 {
 	printf("CON> Entered main().\n");
@@ -87,19 +142,33 @@ int main(int argc, char *argv[])
 	pthread_join(stat_muncher_thd, NULL);
 	printf("CON> stat_muncher_thd joined.\n");
 
+	/* Free the condition variable and mutex */
 	pthread_cond_destroy(&queue_cond);
 	pthread_mutex_destroy(&queue_mutex);
+
+	/* Free all customers allocated through the simulation */
+	customer_free_all();
 
 	return EXIT_SUCCESS;
 }
 
+/*
+ * The cust_gen function backs the customer generator thread. Between the time
+ * of bank open and close, it continually tries to add more customers to the
+ * queue. It does this every 1 to 4 minutes. Whenever a new customer is pushed
+ * to the queue, this thread must notify the tellers such that they wake up.
+ *
+ * At the end of the day, this thread is responsible for waking the tellers up
+ * one more time. Otherwise, the tellers will get stuck waiting (when no more
+ * customers will show up).
+ */
 static void cust_gen()
 {
-	unsigned int thd_seed;
-	struct timespec thd_stamp;
-	char thd_buf[40];
+	unsigned int thd_seed; /* thread storage for sim_choice() */
+	struct timespec thd_stamp; /* thread storage for sim_elaps... */
+	char thd_buf[40]; /* thread storage for sim_fmt_time() */
 
-	int sim_sec = SEC_AT_BANK_OPEN;
+	int sim_sec = SEC_AT_BANK_OPEN; /* current second of the simulation */
 
 	sim_fmt_time(thd_buf, sizeof(thd_buf), sim_sec);
 	printf("%s bank opens.\n", thd_buf);
@@ -107,6 +176,7 @@ static void cust_gen()
 	int cur_cid = 0;
 	int sec_til_close;
 	while ((sec_til_close = SEC_AT_BANK_CLOSE - sim_sec) > 0) {
+		/* Wait for the next customer to arrive */
 		int arrival = sim_choose(&thd_seed, ARRIVE_LO, ARRIVE_HI);
 		sim_sleep(arrival, &sim_sec);
 
@@ -116,6 +186,7 @@ static void cust_gen()
 		printf("%s customer %03d enters the bank.\n", thd_buf,
 				next->cid);
 
+		/* Gain access to the queue and push the newly arrived cust */
 		sim_elaps_init(&thd_stamp);
 		pthread_mutex_lock(&queue_mutex); /* Get lock */
 		sim_elaps_calc(&thd_stamp, &sim_sec);
@@ -145,41 +216,93 @@ static void cust_gen()
 	printf("%s bank closes.\n", thd_buf);
 }
 
+/*
+ * The teller function backs each of the the teller threads. Between the time
+ * of bank open and close, it continually tries to pull customers off the queue.
+ * After obtaining a customer, the teller will perform the transaction (by
+ * sleeping). While doing all this, the teller will communicate with the stats
+ * muncher thread, updating its accounting of measurements.
+ *
+ * Params: tid_ptr - A pointer to this threads' id
+ */
 static void teller(int *tid_ptr)
 {
-	int tid = *tid_ptr + 1;
+	int tid = *tid_ptr + 1; /* Print out a tid indexed at 1 */
 
+	/* Attach to the stat_muncher's channel */
 	int coid = ConnectAttach(0, (pid_t) 0, chid, 0 | _NTO_SIDE_CHANNEL, 0);
 
-	unsigned int thd_seed;
-	struct timespec thd_stamp;
-	char thd_buf[40];
+	unsigned int thd_seed; /* thread storage for sim_choice() */
+	struct timespec thd_stamp; /* thread storage for sim_elaps... */
+	char thd_buf[40]; /* thread storage for sim_fmt_time() */
 
-	int sim_sec = SEC_AT_BANK_OPEN;
+	int sim_sec = SEC_AT_BANK_OPEN; /* current second of the simulation */
 
 	sim_fmt_time(thd_buf, sizeof(thd_buf), sim_sec);
 	printf("%s teller %d clocks in.\n", thd_buf, tid);
 
+	/* Schedule first break */
+	int next_break = sim_sec + sim_choose(&thd_seed, TBREAK_LO, TBREAK_HI);
+	/* If blocked, wake after this number of seconds to take a break */
+	int wake_after = 0;
+
 	int sec_til_close;
 	while ((sec_til_close = SEC_AT_BANK_CLOSE - sim_sec) > 0) {
 
-		/* TODO: See if it is time for break */
+		/* See if it is time for break */
+		take_break: if (sim_sec >= next_break) {
+			/* Schedule next break now (at start of break now) */
+			next_break = sim_sec + sim_choose(&thd_seed, TBREAK_LO,
+					TBREAK_HI);
 
-		int twait_t0 = sim_sec;
+			sim_fmt_time(thd_buf, sizeof(thd_buf), sim_sec);
+			printf("%s teller %d went on break.\n", thd_buf, tid);
+
+			/* Nap for the duration of the break */
+			int nap = sim_choose(&thd_seed, LBREAK_LO, LBREAK_HI);
+			sim_sleep(nap, &sim_sec);
+
+			sim_fmt_time(thd_buf, sizeof(thd_buf), sim_sec);
+			printf("%s teller %d is back at work.\n", thd_buf, tid);
+		}
+
+		int twait_t0 = sim_sec; /* Start waiting for the customer */
 
 		sim_elaps_init(&thd_stamp);
 		pthread_mutex_lock(&queue_mutex); /* Get lock */
-		int poll_code;
-		while ((poll_code = customer_q_can_poll()) == ENOCUS) {
-			/*printf("%s teller %d wakes with code %d.\n", thd_buf,
-			 tid, poll_code);*/
-
-			/* Wait on condition - until custs are available */
-			pthread_cond_wait(&queue_cond, &queue_mutex);
-		}
 		sim_elaps_calc(&thd_stamp, &sim_sec);
 
-		int twait_t1 = sim_sec;
+		int poll_code;
+		while (((poll_code = customer_q_can_poll()) == ENOCUS)
+				&& (wake_after = next_break - sim_sec) > 0) {
+
+			sim_elaps_init(&thd_stamp);
+
+			/* Keep sleeping unless we need to break */
+			struct timespec wake_after_ts;
+			clock_gettime(CLOCK_REALTIME, &wake_after_ts);
+
+			long my_nanos = SIM_SEC_TO_NSC(min(wake_after, 300));
+			long rt_nanos = wake_after_ts.tv_nsec;
+
+			/* Manage overflow */
+			if (rt_nanos + my_nanos > 1000000000) {
+				wake_after_ts.tv_nsec = (rt_nanos + my_nanos)
+						- 1000000000;
+				wake_after_ts.tv_sec++;
+			} else {
+				wake_after_ts.tv_nsec += my_nanos;
+			}
+
+			/* Wake at least every 5 minutes to check for a break */
+			pthread_cond_timedwait(&queue_cond, &queue_mutex,
+					&wake_after_ts);
+
+			sim_elaps_calc(&thd_stamp, &sim_sec);
+		}
+		/* Break-forcing happens after the lock is released */
+
+		int twait_t1 = sim_sec; /* End of time waiting for a customer */
 
 		/* Do mutually exclusive work - poll the queue */
 
@@ -197,11 +320,22 @@ static void teller(int *tid_ptr)
 		}
 		pthread_mutex_unlock(&queue_mutex); /* Release lock */
 
-		if(poll_code == EAVAIL) {
+		/* Take a break if no customer was polled and it's scheduled */
+		if (poll_code != EAVAIL && sim_sec >= next_break) {
+			goto take_break;
+		}
+
+		/*
+		 * Send measurements to the statistics engine - only if there
+		 * was a customer polled
+		 */
+		if (poll_code == EAVAIL) {
 			int elaps;
+			/* Time customer spent waiting in the queue */
 			elaps = cust->dequeue_sec - cust->enqueue_sec;
 			MsgSendPulse(coid, -1, MET_CUST_Q_ELAPSED, elaps);
 
+			/* Time teller spent waiting for a new customer */
 			elaps = twait_t1 - twait_t0;
 			MsgSendPulse(coid, -1, MET_TELL_C_ELAPSED, elaps);
 		}
@@ -224,6 +358,7 @@ static void teller(int *tid_ptr)
 		int transt = sim_choose(&thd_seed, TRANST_LO, TRANST_HI);
 		sim_sleep(transt, &sim_sec);
 
+		/* Time customer and teller spent in the transaction */
 		cust->time_with_teller = transt;
 		MsgSendPulse(coid, -1, MET_CUST_T_ELAPSED, transt);
 
@@ -235,19 +370,35 @@ static void teller(int *tid_ptr)
 	sim_fmt_time(thd_buf, sizeof(thd_buf), sim_sec);
 	printf("%s teller %d clocks out.\n", thd_buf, tid);
 
+	/*
+	 * Disconnect from the stat_muncher's channel. When all tellers have
+	 * disconnected, the stat_muncher will complete.
+	 */
 	ConnectDetach(coid);
 }
 
-#define MET_MAX_DATA_POINTS 500
+#define MET_MAX_DATA_POINTS 500 /* The max number of data points for metrics */
+
+/*
+ * The stat_muncher function backs the statistics engine thread. It spins up
+ * a channel for communication of new statistics measurements. This occurs over
+ * various pulse messages.
+ *
+ * Once all threads connected to the channel have disconnected, this function
+ * will calculate each statistic and print the report out.
+ */
 static void stat_muncher()
 {
-	int acc_c = 0;
-	int max_depth = 0;
+	int acc_c = 0; /* Counts the number of customers encountered */
+	int max_depth = 0; /* Maximum depth of the customer queue */
 
+	/* Holds elapsed times customers spent waiting in the queue */
 	int cust_q_waits[MET_MAX_DATA_POINTS];
 	int ind_q = 0;
+	/* Holds elapsed times customers spent in transaction with a teller */
 	int cust_t_waits[MET_MAX_DATA_POINTS];
 	int ind_t = 0;
+	/* Holds elapsed times tellers spent waiting for a new customer */
 	int tell_c_waits[MET_MAX_DATA_POINTS];
 	int ind_c = 0;
 
@@ -264,6 +415,7 @@ static void stat_muncher()
 		{
 		case _PULSE_CODE_DISCONNECT:
 			goto dcon;
+			/* When all tellers have disconnected */
 		case MET_CUST_Q_ELAPSED:
 			cust_q_waits[ind_q++] = pul.value.sival_int;
 			acc_c++;
@@ -281,6 +433,8 @@ static void stat_muncher()
 
 	/* Hack: no mutual exclusion to the customer. All other threads done. */
 	max_depth = customer_q_max_depth();
+
+	/* Calculate the average of each array */
 
 	int i;
 	int avg_q = 0;
@@ -307,6 +461,7 @@ static void stat_muncher()
 	}
 	avg_c /= ind_c + 1;
 
+	/* Sleep 1s before printing out the result metrics */
 	struct timespec sleep;
 	sleep.tv_sec = 1;
 	sleep.tv_nsec = 0;
